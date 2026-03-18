@@ -3,6 +3,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { initSchema } from './database.js';
 import { ensureBucket } from './minio.js';
+import { requireAuth } from './auth.js';
+import authRouter from './routes/auth.js';
 import expensesRouter from './routes/expenses.js';
 import categoriesRouter from './routes/categories.js';
 import budgetsRouter from './routes/budgets.js';
@@ -24,10 +26,15 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.use('/expenses',   expensesRouter);
-app.use('/categories', categoriesRouter);
-app.use('/budgets',    budgetsRouter);
-app.use('/receipts',   receiptsRouter);
+// Auth routes — /auth/register and /auth/login are public;
+// /auth/me applies requireAuth internally via the route handler.
+app.use('/auth', authRouter);
+
+// All data routes require a valid Bearer JWT
+app.use('/expenses',   requireAuth, expensesRouter);
+app.use('/categories', requireAuth, categoriesRouter);
+app.use('/budgets',    requireAuth, budgetsRouter);
+app.use('/receipts',   requireAuth, receiptsRouter);
 
 // Mobile web UI — served at /
 app.use(express.static(join(__dirname, '../web')));

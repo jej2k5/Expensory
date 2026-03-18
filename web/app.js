@@ -2,8 +2,8 @@
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 const fmtCurrency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-const fmt  = v  => fmtCurrency.format(v);
-const fmtShort = v => fmtCurrency.format(v).replace(/\.00$/, '');
+const fmt      = v  => fmtCurrency.format(v);
+const fmtShort = v  => fmtCurrency.format(v).replace(/\.00$/, '');
 const fmtMonth = ym => new Date(ym + '-15').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 const fmtDate  = d  => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const esc = s  => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -45,30 +45,52 @@ function catEmoji(name) {
   return '💰';
 }
 
+// ── Auth token storage ───────────────────────────────────────────────────────
+const TOKEN_KEY = 'expensory_token';
+function getToken()        { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t)       { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken()      { localStorage.removeItem(TOKEN_KEY); }
+function isAuthenticated() { return !!getToken(); }
+
 // ── API layer ────────────────────────────────────────────────────────────────
 const api = {
+  _hdrs(json = true) {
+    const h = {};
+    if (json) h['Content-Type'] = 'application/json';
+    const t = getToken();
+    if (t) h['Authorization'] = `Bearer ${t}`;
+    return h;
+  },
   async _get(path) {
-    const r = await fetch(path);
+    const r = await fetch(path, { headers: this._hdrs(false) });
+    if (r.status === 401) { handleUnauth(); throw new Error('Session expired — please sign in again'); }
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `HTTP ${r.status}`); }
     return r.json();
   },
   async _post(path, body) {
-    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(path, { method: 'POST', headers: this._hdrs(), body: JSON.stringify(body) });
+    if (r.status === 401) { handleUnauth(); throw new Error('Session expired — please sign in again'); }
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `HTTP ${r.status}`); }
     return r.json();
   },
   async _del(path) {
-    const r = await fetch(path, { method: 'DELETE' });
+    const r = await fetch(path, { method: 'DELETE', headers: this._hdrs(false) });
+    if (r.status === 401) { handleUnauth(); throw new Error('Session expired — please sign in again'); }
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `HTTP ${r.status}`); }
     return r.json();
   },
 
-  categories:    ()         => api._get('/categories'),
-  budgets:       month      => api._get(`/budgets?month=${month}`),
-  expenses:      params     => api._get(`/expenses?${new URLSearchParams(params)}`),
-  expenseSummary:(ym)       => { const r = monthRange(ym); return api._get(`/expenses/summary?group_by=category&start_date=${r.start}&end_date=${r.end}`); },
-  deleteExpense: id         => api._del(`/expenses/${id}`),
-  createExpense: body       => api._post('/expenses', body),
+  // Auth (no token required)
+  login:    body => fetch('/auth/login',    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  register: body => fetch('/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+
+  // Data endpoints (require token)
+  categories:    ()     => api._get('/categories'),
+  budgets:       month  => api._get(`/budgets?month=${month}`),
+  expenses:      params => api._get(`/expenses?${new URLSearchParams(params)}`),
+  expenseSummary:(ym)   => { const r = monthRange(ym); return api._get(`/expenses/summary?group_by=category&start_date=${r.start}&end_date=${r.end}`); },
+  deleteExpense: id     => api._del(`/expenses/${id}`),
+  createExpense: body   => api._post('/expenses', body),
   uploadReceipt: async(file) => {
     const data = await new Promise((res, rej) => {
       const fr = new FileReader();
@@ -80,14 +102,20 @@ const api = {
   },
 };
 
+// ── Session handling ─────────────────────────────────────────────────────────
+function handleUnauth() {
+  clearToken();
+  showAuthScreen();
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 const S = {
   tab:      'home',
   month:    currentYM(),
-  cats:     null,   // array of categories (cached)
-  listCat:  null,   // category_id filter on list tab
-  receipt:  null,   // { file, previewUrl, uploaded: bool, filename, url }
-  selCatId: null,   // selected category id in add form
+  cats:     null,
+  listCat:  null,
+  receipt:  null,
+  selCatId: null,
 };
 
 // ── Toasts ───────────────────────────────────────────────────────────────────
@@ -98,6 +126,91 @@ function toast(msg, type = 'ok') {
   document.getElementById('toast-container').prepend(el);
   setTimeout(() => el.remove(), 3400);
 }
+
+// ── Auth screen ───────────────────────────────────────────────────────────────
+function showAuthScreen() {
+  document.getElementById('auth-screen').classList.remove('hidden');
+  document.getElementById('app').classList.add('hidden');
+}
+
+function showApp() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  S.cats = null;   // reset cache on new session
+  updateHeaderMonth();
+  switchTab('home');
+}
+
+// Auth tab switcher
+document.querySelectorAll('.auth-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.authTab;
+    document.querySelectorAll('.auth-tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.getElementById('login-form').classList.toggle('hidden',    target !== 'login');
+    document.getElementById('register-form').classList.toggle('hidden', target !== 'register');
+  });
+});
+
+// Login
+document.getElementById('login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-error');
+  err.classList.add('hidden');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    const r = await api.login({
+      username: document.getElementById('login-username').value.trim(),
+      password: document.getElementById('login-password').value,
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Sign-in failed');
+    setToken(data.token);
+    showApp();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+
+// Register
+document.getElementById('register-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('register-btn');
+  const err = document.getElementById('register-error');
+  err.classList.add('hidden');
+  btn.disabled = true;
+  btn.textContent = 'Creating account…';
+  try {
+    const r = await api.register({
+      name:     document.getElementById('reg-name').value.trim(),
+      username: document.getElementById('reg-username').value.trim(),
+      email:    document.getElementById('reg-email').value.trim(),
+      password: document.getElementById('reg-password').value,
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Registration failed');
+    toast('Account created — please sign in');
+    // Switch to login tab
+    document.querySelector('[data-auth-tab="login"]').click();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create account';
+  }
+});
+
+// Logout
+document.getElementById('logout-btn').addEventListener('click', () => {
+  clearToken();
+  showAuthScreen();
+});
 
 // ── Month navigation ─────────────────────────────────────────────────────────
 function updateHeaderMonth() {
@@ -151,7 +264,7 @@ async function renderHome() {
   const el = document.getElementById('home-content');
   el.innerHTML = '<div class="spinner">Loading…</div>';
   try {
-    const r          = monthRange(S.month);
+    const r = monthRange(S.month);
     const [sumRes, expRes] = await Promise.all([
       api.expenseSummary(S.month),
       api.expenses({ start_date: r.start, end_date: r.end, limit: 5 }),
@@ -161,7 +274,6 @@ async function renderHome() {
     const total     = Number(sumRes.summary?.total || 0);
     const count     = Number(sumRes.summary?.count || 0);
     const recent    = expRes.expenses || [];
-    const avgVal    = count > 0 ? total / count : 0;
 
     el.innerHTML = `
       <div class="hero">
@@ -177,7 +289,7 @@ async function renderHome() {
             <div class="hero-stat-label">Categories</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-val">${count > 0 ? fmtShort(avgVal) : '—'}</div>
+            <div class="hero-stat-val">${count > 0 ? fmtShort(total / count) : '—'}</div>
             <div class="hero-stat-label">Average</div>
           </div>
         </div>
@@ -187,7 +299,7 @@ async function renderHome() {
         <div class="card">
           <div class="card-label">By Category</div>
           ${breakdown.map(c => {
-            const pct = total > 0 ? (Number(c.total) / total * 100) : 0;
+            const pct   = total > 0 ? (Number(c.total) / total * 100) : 0;
             const color = c.category_color || '#9ca3af';
             return `
               <div class="cat-row">
@@ -231,7 +343,7 @@ async function renderHome() {
 
 // ── ADD TAB ───────────────────────────────────────────────────────────────────
 async function renderAdd() {
-  const el = document.getElementById('add-content');
+  const el   = document.getElementById('add-content');
   const cats = await getCats().catch(() => []);
 
   el.innerHTML = `
@@ -297,19 +409,16 @@ async function renderAdd() {
     </button>
   `;
 
-  // Receipt zone tap
   el.querySelector('#receipt-zone')?.addEventListener('click', () => {
     document.getElementById('file-input').click();
   });
 
-  // Remove receipt
   el.querySelector('#remove-receipt')?.addEventListener('click', () => {
     if (S.receipt?.previewUrl) URL.revokeObjectURL(S.receipt.previewUrl);
     S.receipt = null;
     renderAdd();
   });
 
-  // Category pills
   el.querySelectorAll('.cat-pill').forEach(p => {
     p.addEventListener('click', () => {
       S.selCatId = p.dataset.catId || null;
@@ -317,7 +426,6 @@ async function renderAdd() {
     });
   });
 
-  // Save
   document.getElementById('save-btn').addEventListener('click', saveExpense);
 }
 
@@ -343,7 +451,6 @@ function receiptPreviewHtml() {
     </div>`;
 }
 
-// File input handler (lives outside any re-rendered container)
 document.getElementById('file-input').addEventListener('change', async e => {
   const file = e.target.files?.[0];
   if (!file) return;
@@ -364,8 +471,8 @@ async function saveExpense() {
   const date   = document.getElementById('f-date')?.value;
   const notes  = document.getElementById('f-notes')?.value?.trim();
 
-  if (!title)           { toast('Please enter a title', 'err');              return; }
-  if (!amount || amount <= 0) { toast('Please enter a valid amount', 'err'); return; }
+  if (!title)                 { toast('Please enter a title', 'err');              return; }
+  if (!amount || amount <= 0) { toast('Please enter a valid amount', 'err');        return; }
 
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
@@ -379,13 +486,11 @@ async function saveExpense() {
       const res = await api.uploadReceipt(S.receipt.file);
       receipt_url = `/receipts/${res.filename}`;
       S.receipt.uploaded = true;
-      S.receipt.filename = res.filename;
       S.receipt.url = receipt_url;
     } else if (S.receipt?.url) {
       receipt_url = S.receipt.url;
     }
 
-    btn.textContent = 'Saving…';
     await api.createExpense({
       title,
       amount,
@@ -396,13 +501,10 @@ async function saveExpense() {
     });
 
     toast('Expense saved!');
-
-    // Reset form state
     if (S.receipt?.previewUrl) URL.revokeObjectURL(S.receipt.previewUrl);
     S.receipt   = null;
     S.selCatId  = null;
-    S.cats      = null;   // invalidate category cache (totals changed)
-
+    S.cats      = null;
     renderAdd();
   } catch (err) {
     toast(err.message, 'err');
@@ -423,11 +525,10 @@ async function renderList() {
 
     const res      = await api.expenses(params);
     const expenses = res.expenses || [];
-
     const allChips = [{ id: null, name: 'All', color: '#9ca3af' }, ...cats];
 
     el.innerHTML = `
-      <div class="filter-chips" id="filter-chips">
+      <div class="filter-chips">
         ${allChips.map(c => `
           <div class="chip ${S.listCat == c.id ? 'active' : ''}" data-cat-id="${c.id ?? ''}">
             <span class="chip-dot" style="background:${esc(c.color)}"></span>${esc(c.name)}
@@ -474,8 +575,8 @@ async function renderBudget() {
         <div class="card">
           <div class="card-label">Budgets · ${fmtMonth(S.month)}</div>
           ${withBudget.map(b => {
-            const pct  = Math.min((Number(b.spent) / Number(b.budget_limit)) * 100, 100);
-            const over = b.over_budget;
+            const pct      = Math.min((Number(b.spent) / Number(b.budget_limit)) * 100, 100);
+            const over     = b.over_budget;
             const barColor = over ? 'var(--danger)' : pct > 80 ? 'var(--warning)' : 'var(--success)';
             return `
               <div class="budget-item">
@@ -535,11 +636,10 @@ async function renderBudget() {
 // ── EXPENSE ROW ───────────────────────────────────────────────────────────────
 function expenseRow(e) {
   const color = e.category_color || '#9ca3af';
-  const emoji = catEmoji(e.category_name);
   return `
     <div class="expense-item" data-id="${esc(e.id)}">
       <div class="expense-icon" style="background:${esc(color)}22">
-        <span>${emoji}</span>
+        <span>${catEmoji(e.category_name)}</span>
       </div>
       <div class="expense-info">
         <div class="expense-title">${esc(e.title)}</div>
@@ -553,14 +653,11 @@ function expenseRow(e) {
 async function openExpenseModal(id) {
   const overlay = document.getElementById('modal-overlay');
   const content = document.getElementById('modal-content');
-
   content.innerHTML = '<div class="spinner" style="padding:32px">Loading…</div>';
   overlay.classList.remove('hidden');
 
   try {
-    const r = await fetch(`/expenses/${id}`);
-    if (!r.ok) throw new Error('Failed to load expense');
-    const e = await r.json();
+    const e     = await api._get(`/expenses/${id}`);
     const color = e.category_color || '#9ca3af';
 
     content.innerHTML = `
@@ -632,11 +729,14 @@ document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('modal-overlay')) closeModal();
 });
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function errorState(msg) {
   return `<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Failed to load</div><div class="empty-sub">${esc(msg)}</div></div>`;
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-updateHeaderMonth();
-switchTab('home');
+if (isAuthenticated()) {
+  showApp();
+} else {
+  showAuthScreen();
+}

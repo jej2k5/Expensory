@@ -3,8 +3,9 @@ FROM node:20-alpine AS base
 
 WORKDIR /app
 
-# Install dependencies in a separate layer for caching
+# Copy manifests and vendored packages together so npm ci can resolve file: deps
 COPY package*.json ./
+COPY vendor/       ./vendor/
 RUN npm ci --omit=dev
 
 # Copy application source

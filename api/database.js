@@ -26,6 +26,15 @@ export async function initSchema() {
   const pool = getPool();
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      username      TEXT NOT NULL UNIQUE,
+      email         TEXT NOT NULL UNIQUE,
+      name          TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS categories (
       id          SERIAL PRIMARY KEY,
       name        TEXT NOT NULL UNIQUE,

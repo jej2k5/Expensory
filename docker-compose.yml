@@ -51,6 +51,7 @@ services:
     environment:
       DATABASE_URL:      postgres://expensory:expensory@postgres:5432/expensory
       API_PORT:          3001
+      JWT_SECRET:        ${JWT_SECRET:-expensory-dev-secret-please-change-in-production}
       MINIO_ENDPOINT:    minio
       MINIO_PORT:        9000
       MINIO_ACCESS_KEY:  expensory

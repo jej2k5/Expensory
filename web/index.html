@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Expensory">
+  <title>Expensory</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.svg">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <span class="header-title">Expensory</span>
+    <div class="header-nav">
+      <button class="icon-btn" id="month-prev" aria-label="Previous month">&#8249;</button>
+      <span class="header-month" id="header-month"></span>
+      <button class="icon-btn" id="month-next" aria-label="Next month">&#8250;</button>
+    </div>
+  </header>
+
+  <!-- ── Main scroll area ─────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Home / Dashboard -->
+    <section class="tab-panel" id="tab-home">
+      <div id="home-content"></div>
+    </section>
+
+    <!-- Add Expense -->
+    <section class="tab-panel hidden" id="tab-add">
+      <div id="add-content"></div>
+    </section>
+
+    <!-- Expense List -->
+    <section class="tab-panel hidden" id="tab-list">
+      <div id="list-content"></div>
+    </section>
+
+    <!-- Budget Status -->
+    <section class="tab-panel hidden" id="tab-budget">
+      <div id="budget-content"></div>
+    </section>
+
+  </main>
+
+  <!-- ── Bottom navigation ─────────────────────────────────────────────────── -->
+  <nav class="bottom-nav" id="bottom-nav">
+
+    <button class="nav-btn active" data-tab="home" aria-label="Home">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+        <polyline points="9 22 9 12 15 12 15 22"/>
+      </svg>
+      <span>Home</span>
+    </button>
+
+    <button class="nav-btn" data-tab="add" aria-label="Add expense">
+      <div class="add-fab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </div>
+      <span>Add</span>
+    </button>
+
+    <button class="nav-btn" data-tab="list" aria-label="Expense list">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="8" y1="6"  x2="21" y2="6"/>
+        <line x1="8" y1="12" x2="21" y2="12"/>
+        <line x1="8" y1="18" x2="21" y2="18"/>
+        <line x1="3" y1="6"  x2="3.01" y2="6"/>
+        <line x1="3" y1="12" x2="3.01" y2="12"/>
+        <line x1="3" y1="18" x2="3.01" y2="18"/>
+      </svg>
+      <span>Expenses</span>
+    </button>
+
+    <button class="nav-btn" data-tab="budget" aria-label="Budget status">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="1"  x2="12" y2="23"/>
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
+      <span>Budget</span>
+    </button>
+
+  </nav>
+
+</div><!-- #app -->
+
+<!-- Hidden file input lives outside any re-rendered section -->
+<input type="file" id="file-input" accept="image/*,application/pdf" capture="environment">
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- Expense detail modal -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div id="modal-sheet" class="modal-sheet">
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

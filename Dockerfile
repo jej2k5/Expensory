@@ -10,6 +10,7 @@ RUN npm ci --omit=dev
 # Copy application source
 COPY api/   ./api/
 COPY mcp/   ./mcp/
+COPY web/   ./web/
 
 EXPOSE 3001
 

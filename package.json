@@ -1,0 +1,22 @@
+{
+  "name": "expensory",
+  "version": "1.0.0",
+  "description": "Expense management application driven through MCP calling REST APIs with SQLite database",
+  "type": "module",
+  "scripts": {
+    "api": "node api/server.js",
+    "mcp": "node mcp/server.js",
+    "dev": "concurrently \"npm run api\" \"npm run mcp\"",
+    "client": "node client/index.js",
+    "setup-db": "node api/database.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.10.1",
+    "better-sqlite3": "^11.9.1",
+    "concurrently": "^9.1.2",
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.24.2"
+  }
+}

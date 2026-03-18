@@ -19,6 +19,26 @@ services:
       retries: 10
       start_period: 10s
 
+  # ── MinIO (S3-compatible object storage for receipt images) ────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     expensory
+      MINIO_ROOT_PASSWORD: expensory123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console  (http://localhost:9001)
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   # ── REST API ───────────────────────────────────────────────────────────────
   api:
     build: .
@@ -26,14 +46,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://expensory:expensory@postgres:5432/expensory
-      API_PORT: 3001
+      DATABASE_URL:      postgres://expensory:expensory@postgres:5432/expensory
+      API_PORT:          3001
+      MINIO_ENDPOINT:    minio
+      MINIO_PORT:        9000
+      MINIO_ACCESS_KEY:  expensory
+      MINIO_SECRET_KEY:  expensory123
+      MINIO_BUCKET:      receipts
     ports:
       - "3001:3001"
-    volumes:
-      # Persist uploaded receipt images across container restarts and rebuilds
-      - uploads_data:/app/uploads/receipts
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
       interval: 5s
@@ -43,4 +67,4 @@ services:
 
 volumes:
   postgres_data:
-  uploads_data:
+  minio_data:

@@ -1,12 +1,6 @@
 import { Router } from 'express';
-import { writeFile } from 'fs/promises';
-import { join, extname } from 'path';
 import { randomBytes } from 'crypto';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-export const UPLOADS_DIR = join(__dirname, '..', '..', 'uploads', 'receipts');
+import { getMinioClient, BUCKET } from '../minio.js';
 
 const ALLOWED_MIMES = new Set([
   'image/jpeg',
@@ -17,16 +11,16 @@ const ALLOWED_MIMES = new Set([
 ]);
 
 const EXT_MAP = {
-  'image/jpeg':    '.jpg',
-  'image/png':     '.png',
-  'image/gif':     '.gif',
-  'image/webp':    '.webp',
-  'application/pdf': '.pdf',
+  'image/jpeg':     '.jpg',
+  'image/png':      '.png',
+  'image/gif':      '.gif',
+  'image/webp':     '.webp',
+  'application/pdf':'.pdf',
 };
 
 const router = Router();
 
-// POST /receipts — save a base64-encoded receipt image to disk
+// POST /receipts — upload a base64-encoded receipt image to MinIO
 router.post('/', async (req, res, next) => {
   try {
     const { data, mimetype, filename: hint } = req.body;
@@ -38,21 +32,42 @@ router.post('/', async (req, res, next) => {
         error: `mimetype must be one of: ${[...ALLOWED_MIMES].join(', ')}`,
       });
 
-    const buffer   = Buffer.from(data, 'base64');
-    const ext      = EXT_MAP[mimetype] || '.bin';
-    const filename = `receipt_${Date.now()}_${randomBytes(4).toString('hex')}${ext}`;
-    const filePath = join(UPLOADS_DIR, filename);
+    const buffer     = Buffer.from(data, 'base64');
+    const ext        = EXT_MAP[mimetype] || '.bin';
+    const objectName = `receipt_${Date.now()}_${randomBytes(4).toString('hex')}${ext}`;
 
-    await writeFile(filePath, buffer);
-    console.log(`[Receipts] Saved ${filename} (${buffer.length} bytes)`);
+    await getMinioClient().putObject(BUCKET, objectName, buffer, buffer.length, {
+      'Content-Type': mimetype,
+    });
+
+    console.log(`[MinIO] Stored ${objectName} (${buffer.length} bytes)`);
 
     res.status(201).json({
-      filename,
+      filename:          objectName,
       size:              buffer.length,
       mimetype,
       original_filename: hint || null,
     });
   } catch (err) { next(err); }
+});
+
+// GET /receipts/:filename — stream the object from MinIO
+router.get('/:filename', async (req, res, next) => {
+  try {
+    const minio      = getMinioClient();
+    const { filename } = req.params;
+
+    const stat = await minio.statObject(BUCKET, filename);
+    res.setHeader('Content-Type',   stat.metaData['content-type'] || 'application/octet-stream');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Cache-Control',  'public, max-age=31536000, immutable');
+
+    const stream = await minio.getObject(BUCKET, filename);
+    stream.pipe(res);
+  } catch (err) {
+    if (err.code === 'NoSuchKey') return res.status(404).json({ error: 'Receipt not found' });
+    next(err);
+  }
 });
 
 export default router;

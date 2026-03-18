@@ -11,9 +11,9 @@ You ──► Claude (claude-opus-4-6)
               │
               │  HTTP  (REST API)
               ▼
-         Express API  ──  /uploads/receipts/  (static files)
-              │
-              │  SQL  (pg pool)
+         Express API ────────────────────── MinIO (S3-compatible)
+              │                              receipt images stored
+              │  SQL  (pg pool)              as objects in a bucket
               ▼
          PostgreSQL
 ```
@@ -32,7 +32,7 @@ You ──► Claude (claude-opus-4-6)
 
 ## Quick Start — Docker Compose
 
-This is the recommended way to run Expensory. Docker Compose handles PostgreSQL and the REST API; you run the client locally.
+This is the recommended way to run Expensory. Docker Compose handles PostgreSQL, MinIO, and the REST API; you run the client locally.
 
 **1. Clone and enter the repo**
 
@@ -47,17 +47,18 @@ cd Expensory
 npm install
 ```
 
-**3. Start PostgreSQL and the API**
+**3. Start all backend services**
 
 ```bash
 docker compose up -d
 ```
 
-This starts two containers:
+This starts three containers:
 - `postgres` — PostgreSQL 16, data persisted in a named Docker volume
+- `minio` — MinIO object storage for receipt images, data persisted in a named Docker volume
 - `api` — the Express REST API on port `3001`
 
-The API automatically creates the database schema and seeds the 9 default categories on first boot.
+The API automatically creates the database schema, seeds the 9 default categories, and ensures the MinIO `receipts` bucket exists on first boot.
 
 **4. Set your Anthropic API key**
 
@@ -256,6 +257,12 @@ The demo:
 | `API_PORT` | `3001` | Port the REST API listens on |
 | `API_BASE` | `http://localhost:{API_PORT}` | Base URL of a running API. When set, the client skips spawning a local API process — use this when running via Docker Compose. |
 | `DEMO_MODE` | `false` | Set to `true` to run the scripted demo instead of the interactive chat |
+| `MINIO_ENDPOINT` | `localhost` | MinIO server hostname (use `minio` inside Docker Compose) |
+| `MINIO_PORT` | `9000` | MinIO S3 API port |
+| `MINIO_USE_SSL` | `false` | Set to `true` for HTTPS / AWS S3 |
+| `MINIO_ACCESS_KEY` | `expensory` | MinIO / S3 access key |
+| `MINIO_SECRET_KEY` | `expensory123` | MinIO / S3 secret key |
+| `MINIO_BUCKET` | `receipts` | Bucket name for receipt images |
 
 ---
 
@@ -335,21 +342,20 @@ budgets (
 ```
 Expensory/
 ├── api/
-│   ├── server.js           # Express entry point; creates uploads dir, awaits schema init
+│   ├── server.js           # Express entry point; initialises DB schema + MinIO bucket
 │   ├── database.js         # pg.Pool setup, schema migration, category seeding
+│   ├── minio.js            # MinIO client singleton + ensureBucket helper
 │   └── routes/
 │       ├── expenses.js     # GET/POST/PUT/DELETE + /summary
 │       ├── categories.js   # GET/POST/PUT/DELETE
 │       ├── budgets.js      # GET/POST/DELETE with upsert logic
-│       └── receipts.js     # POST — base64 upload, saved to uploads/receipts/
+│       └── receipts.js     # POST — putObject to MinIO; GET — getObject proxy
 ├── mcp/
 │   └── server.js           # MCP server; 12 Zod-validated tools
 ├── client/
 │   └── index.js            # Agentic loop: vision input detection + Anthropic API + MCP
-├── uploads/
-│   └── receipts/           # Saved receipt images (Docker volume in production)
 ├── Dockerfile              # node:20-alpine image for the API
-├── docker-compose.yml      # postgres + api (with uploads volume) services
+├── docker-compose.yml      # postgres + minio + api services
 ├── .env.example            # Reference for all environment variables
 └── package.json
 ```
@@ -402,11 +408,16 @@ All endpoints return JSON. Errors follow `{ "error": "message" }`.
 
 ## Receipt Image Storage
 
-Receipt images are saved to `uploads/receipts/` in the project root (or `/app/uploads/receipts/` inside the Docker container). In the Docker Compose setup this directory is backed by a named volume (`uploads_data`) so images survive container restarts and rebuilds.
+Receipt images are stored as objects in a MinIO bucket (`receipts` by default). MinIO is an S3-compatible object store — the same API works with AWS S3 or any S3-compatible service by changing the environment variables.
 
-Each saved file is named `receipt_<timestamp>_<random>.<ext>` and is served directly by the API at `/receipts/<filename>`.
+Each object is named `receipt_<timestamp>_<random>.<ext>`. Images are served through the API at `/receipts/<filename>`, which proxies the object from MinIO and sets appropriate `Content-Type` and `Cache-Control` headers.
 
-To back up receipts, copy the contents of the uploads volume (or the local `uploads/receipts/` directory).
+**MinIO web console** (Docker Compose): http://localhost:9001
+Login: `expensory` / `expensory123`
+
+**Backing up receipts**: export the `minio_data` Docker volume, or use `mc mirror` to sync the bucket to another destination.
+
+**Using AWS S3 instead of MinIO**: set `MINIO_ENDPOINT=s3.amazonaws.com`, `MINIO_USE_SSL=true`, and supply your AWS credentials. The `minio` npm package is S3-compatible.
 
 ---
 
@@ -415,11 +426,14 @@ To back up receipts, copy the contents of the uploads volume (or the local `uplo
 Useful when developing or debugging a specific layer:
 
 ```bash
-# Terminal 1 — PostgreSQL (via Docker only)
-docker compose up postgres
+# Terminal 1 — PostgreSQL + MinIO (via Docker)
+docker compose up postgres minio
 
-# Terminal 2 — REST API
-DATABASE_URL=postgres://expensory:expensory@localhost:5432/expensory node api/server.js
+# Terminal 2 — REST API (connects to local postgres + minio)
+DATABASE_URL=postgres://expensory:expensory@localhost:5432/expensory \
+  MINIO_ENDPOINT=localhost MINIO_PORT=9000 \
+  MINIO_ACCESS_KEY=expensory MINIO_SECRET_KEY=expensory123 \
+  node api/server.js
 
 # Terminal 3 — MCP server (stdio; connects to the API)
 API_BASE=http://localhost:3001 node mcp/server.js

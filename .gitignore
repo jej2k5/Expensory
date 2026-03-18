@@ -3,5 +3,4 @@ node_modules/
 *.db-shm
 *.db-wal
 .env
-uploads/receipts/*
-!uploads/receipts/.gitkeep
+uploads/

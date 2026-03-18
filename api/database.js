@@ -1,80 +1,84 @@
-import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import pg from 'pg';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, '..', 'expensory.db');
+const { Pool } = pg;
 
-let db;
+let pool;
 
-export function getDb() {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    initSchema();
+export function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL ||
+        'postgres://expensory:expensory@localhost:5432/expensory',
+      // Sensible pool defaults
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+
+    pool.on('error', (err) => {
+      console.error('[DB] Unexpected pool error:', err.message);
+    });
   }
-  return db;
+  return pool;
 }
 
-function initSchema() {
-  db.exec(`
+export async function initSchema() {
+  const pool = getPool();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      budget_limit REAL DEFAULT NULL,
-      color TEXT DEFAULT '#6366f1',
-      created_at TEXT DEFAULT (datetime('now'))
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      budget_limit NUMERIC,
+      color       TEXT NOT NULL DEFAULT '#6366f1',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS expenses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      amount REAL NOT NULL CHECK(amount > 0),
+      id          SERIAL PRIMARY KEY,
+      title       TEXT NOT NULL,
+      amount      NUMERIC NOT NULL CHECK (amount > 0),
       category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-      date TEXT NOT NULL DEFAULT (date('now')),
-      description TEXT DEFAULT '',
-      receipt_url TEXT DEFAULT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      date        DATE NOT NULL DEFAULT CURRENT_DATE,
+      description TEXT NOT NULL DEFAULT '',
+      receipt_url TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS budgets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-      month TEXT NOT NULL,
-      limit_amount REAL NOT NULL CHECK(limit_amount > 0),
-      created_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(category_id, month)
+      id           SERIAL PRIMARY KEY,
+      category_id  INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      month        CHAR(7) NOT NULL,        -- YYYY-MM
+      limit_amount NUMERIC NOT NULL CHECK (limit_amount > 0),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (category_id, month)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
+    CREATE INDEX IF NOT EXISTS idx_expenses_date     ON expenses(date);
     CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category_id);
-    CREATE INDEX IF NOT EXISTS idx_budgets_month ON budgets(month);
+    CREATE INDEX IF NOT EXISTS idx_budgets_month     ON budgets(month);
   `);
 
-  // Seed default categories if empty
-  const count = db.prepare('SELECT COUNT(*) as n FROM categories').get();
-  if (count.n === 0) {
-    const insert = db.prepare(
-      'INSERT INTO categories (name, color) VALUES (?, ?)'
-    );
-    const defaults = [
-      ['Food & Dining', '#f59e0b'],
-      ['Transportation', '#3b82f6'],
-      ['Shopping', '#ec4899'],
-      ['Entertainment', '#8b5cf6'],
-      ['Health & Medical', '#10b981'],
-      ['Housing & Utilities', '#ef4444'],
-      ['Travel', '#06b6d4'],
-      ['Education', '#f97316'],
-      ['Other', '#6b7280'],
-    ];
-    const insertMany = db.transaction((rows) => {
-      for (const row of rows) insert.run(...row);
-    });
-    insertMany(defaults);
+  // Seed default categories if the table is empty
+  const { rows } = await pool.query('SELECT COUNT(*) AS n FROM categories');
+  if (parseInt(rows[0].n) === 0) {
+    await pool.query(`
+      INSERT INTO categories (name, color) VALUES
+        ('Food & Dining',      '#f59e0b'),
+        ('Transportation',     '#3b82f6'),
+        ('Shopping',           '#ec4899'),
+        ('Entertainment',      '#8b5cf6'),
+        ('Health & Medical',   '#10b981'),
+        ('Housing & Utilities','#ef4444'),
+        ('Travel',             '#06b6d4'),
+        ('Education',          '#f97316'),
+        ('Other',              '#6b7280')
+    `);
+    console.log('[DB] Default categories seeded.');
   }
+
+  console.log('[DB] Schema ready.');
 }
 
-export default getDb;
+export default getPool;

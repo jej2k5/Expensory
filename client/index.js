@@ -2,10 +2,10 @@
  * Expensory Client
  *
  * Demonstrates the full stack:
- *   Claude (Anthropic API) → MCP Server → REST API → SQLite DB
+ *   Claude (Anthropic API) → MCP Server → REST API → PostgreSQL DB
  *
  * The client:
- *   1. Spawns the REST API server
+ *   1. Optionally spawns the REST API server (skipped when API_BASE is set)
  *   2. Connects to the MCP server over stdio
  *   3. Fetches all available MCP tools
  *   4. Runs an interactive agentic loop where Claude manages expenses
@@ -15,8 +15,11 @@
  *   ANTHROPIC_API_KEY=sk-... node client/index.js
  *
  * Optional env vars:
- *   DEMO_MODE=true   Run a scripted demo instead of interactive chat
- *   API_PORT=3001    Override the REST API port
+ *   DEMO_MODE=true                 Run a scripted demo instead of interactive chat
+ *   API_BASE=http://localhost:3001 Point to an existing API (e.g. Docker Compose)
+ *                                  When set, the client does NOT spawn a local API process.
+ *   API_PORT=3001                  Override the local API port (ignored when API_BASE is set)
+ *   DATABASE_URL=postgres://...    Passed through to the local API server when spawned
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -30,6 +33,10 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const API_PORT = process.env.API_PORT || 3001;
+
+// When API_BASE is already set (e.g. pointing at Docker Compose), skip spawning locally.
+const EXTERNAL_API = Boolean(process.env.API_BASE);
+const API_BASE_URL = process.env.API_BASE || `http://localhost:${API_PORT}`;
 
 // ---------------------------------------------------------------------------
 // Boot the REST API server
@@ -66,7 +73,7 @@ async function connectMcp() {
     command: 'node',
     args: ['mcp/server.js'],
     cwd: ROOT,
-    env: { ...process.env, API_BASE: `http://localhost:${API_PORT}` },
+    env: { ...process.env, API_BASE: API_BASE_URL },
   });
 
   const client = new Client({ name: 'expensory-client', version: '1.0.0' });
@@ -251,8 +258,13 @@ async function main() {
     process.exit(1);
   }
 
-  console.error('[Expensory] Starting REST API server...');
-  const apiProc = await startApiServer();
+  let apiProc = null;
+  if (EXTERNAL_API) {
+    console.error(`[Expensory] Using external API at ${API_BASE_URL}`);
+  } else {
+    console.error('[Expensory] Starting REST API server...');
+    apiProc = await startApiServer();
+  }
 
   console.error('[Expensory] Connecting to MCP server...');
   const mcpClient = await connectMcp();
@@ -273,7 +285,7 @@ async function main() {
     }
   } finally {
     await mcpClient.close();
-    apiProc.kill();
+    if (apiProc) apiProc.kill();
   }
 }
 

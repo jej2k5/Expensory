@@ -1,6 +1,6 @@
 # Expensory
 
-An expense management application entirely driven through **MCP (Model Context Protocol)** — Claude calls MCP tools, which call a REST API, which persists data in SQLite.
+An expense management application entirely driven through **MCP (Model Context Protocol)** — Claude calls MCP tools, which call a REST API, which persists data in PostgreSQL.
 
 ```
 Claude (Anthropic API)
@@ -13,9 +13,9 @@ Claude (Anthropic API)
        ▼
   REST API  (Express + 3 route groups)
        │
-       │  SQL queries
+       │  SQL queries (pg pool)
        ▼
-  SQLite Database  (expenses · categories · budgets)
+  PostgreSQL  (expenses · categories · budgets)
 ```
 
 ---
@@ -83,23 +83,48 @@ The MCP server exposes 11 tools that Claude uses to manage all data:
 
 ## Setup
 
+### Option A — Docker Compose (recommended)
+
+Starts PostgreSQL and the REST API together:
+
 ```bash
-npm install
+docker compose up -d
 ```
 
-Requires Node.js 18+ (uses ES modules).
+Then run the client locally (it spawns the MCP server and connects to the Dockerized API):
+
+```bash
+npm install
+ANTHROPIC_API_KEY=sk-... API_BASE=http://localhost:3001 node client/index.js
+```
+
+### Option B — Local development
+
+Requires a running PostgreSQL instance (connection string via `DATABASE_URL`).
+
+```bash
+# 1. Create database
+createdb expensory
+
+# 2. Install dependencies
+npm install
+
+# 3. Run
+ANTHROPIC_API_KEY=sk-... DATABASE_URL=postgres://user:pass@localhost:5432/expensory \
+  node client/index.js
+```
+
+Copy `.env.example` to `.env` and fill in values, then simply run:
+
+```bash
+node client/index.js
+```
 
 ---
 
 ## Usage
 
-### Option 1 — Interactive Chat
-
-```bash
-ANTHROPIC_API_KEY=sk-... node client/index.js
-```
-
-Start a conversation with Claude. Examples:
+### Interactive Chat
 
 ```
 You: Add a $45 dinner at Nobu to Food & Dining for today
@@ -109,26 +134,37 @@ You: Am I over budget anywhere this month?
 You: Show me all expenses over $100
 ```
 
-### Option 2 — Demo Mode (scripted walkthrough)
+### Demo Mode (scripted walkthrough)
 
 ```bash
 ANTHROPIC_API_KEY=sk-... DEMO_MODE=true node client/index.js
+# or: npm run demo
 ```
 
-Automatically seeds sample expenses, sets budgets, and demonstrates summaries and budget status.
+Automatically seeds sample expenses, sets budgets, and shows summaries + budget status.
 
-### Option 3 — Run components separately
+### Run components separately
 
 ```bash
-# Terminal 1: REST API
-node api/server.js
+# Terminal 1: REST API (needs DATABASE_URL)
+DATABASE_URL=postgres://... node api/server.js
 
-# Terminal 2: MCP server (connects to the API)
+# Terminal 2: MCP server (points at the API)
 API_BASE=http://localhost:3001 node mcp/server.js
 
-# Terminal 3: Client
-ANTHROPIC_API_KEY=sk-... node client/index.js
+# Terminal 3: Client (connects to existing API, skips spawning one)
+ANTHROPIC_API_KEY=sk-... API_BASE=http://localhost:3001 node client/index.js
 ```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | *(required)* | Anthropic API key for the client |
+| `DATABASE_URL` | `postgres://expensory:expensory@localhost:5432/expensory` | PostgreSQL connection string |
+| `API_PORT` | `3001` | REST API listen port |
+| `API_BASE` | `http://localhost:{API_PORT}` | API URL used by MCP server and client. Set this to skip spawning a local API process. |
+| `DEMO_MODE` | `false` | Run scripted demo instead of interactive chat |
 
 ---
 
@@ -137,18 +173,20 @@ ANTHROPIC_API_KEY=sk-... node client/index.js
 ```
 Expensory/
 ├── api/
-│   ├── server.js          # Express app entry point
-│   ├── database.js        # SQLite setup + schema migration
+│   ├── server.js           # Express app entry point (top-level await for DB init)
+│   ├── database.js         # pg Pool + schema migration + category seeding
 │   └── routes/
-│       ├── expenses.js    # CRUD + summary for expenses
-│       ├── categories.js  # CRUD for categories
-│       └── budgets.js     # Budget management
+│       ├── expenses.js     # CRUD + filters + aggregate summary
+│       ├── categories.js   # CRUD for categories
+│       └── budgets.js      # Monthly budget upsert + status
 ├── mcp/
-│   └── server.js          # MCP server with 11 expense tools
+│   └── server.js           # MCP server — 11 expense-management tools (Zod-validated)
 ├── client/
-│   └── index.js           # Claude client (Anthropic API + MCP)
-├── package.json
-└── expensory.db           # SQLite database (created on first run)
+│   └── index.js            # Anthropic API client with MCP tool loop
+├── Dockerfile              # API image (node:20-alpine)
+├── docker-compose.yml      # postgres + api services
+├── .env.example            # Environment variable reference
+└── package.json
 ```
 
 ---
@@ -156,10 +194,12 @@ Expensory/
 ## Database Schema
 
 ```sql
-categories (id, name, budget_limit, color, created_at)
-expenses   (id, title, amount, category_id, date, description, receipt_url, created_at, updated_at)
-budgets    (id, category_id, month, limit_amount, created_at)
+categories (id SERIAL, name TEXT UNIQUE, budget_limit NUMERIC, color TEXT, created_at TIMESTAMPTZ)
+expenses   (id SERIAL, title TEXT, amount NUMERIC, category_id INT REFERENCES categories,
+            date DATE, description TEXT, receipt_url TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)
+budgets    (id SERIAL, category_id INT, month CHAR(7), limit_amount NUMERIC,
+            created_at TIMESTAMPTZ, UNIQUE(category_id, month))
 ```
 
-Default categories: Food & Dining, Transportation, Shopping, Entertainment,
-Health & Medical, Housing & Utilities, Travel, Education, Other.
+Default categories seeded on first start: Food & Dining, Transportation, Shopping,
+Entertainment, Health & Medical, Housing & Utilities, Travel, Education, Other.

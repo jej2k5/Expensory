@@ -28,7 +28,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { spawn } from 'child_process';
 import { createInterface } from 'readline';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, extname, resolve } from 'path';
+import { readFileSync, existsSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -37,6 +38,53 @@ const API_PORT = process.env.API_PORT || 3001;
 // When API_BASE is already set (e.g. pointing at Docker Compose), skip spawning locally.
 const EXTERNAL_API = Boolean(process.env.API_BASE);
 const API_BASE_URL = process.env.API_BASE || `http://localhost:${API_PORT}`;
+
+// ---------------------------------------------------------------------------
+// Receipt / image helpers
+// ---------------------------------------------------------------------------
+
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf']);
+
+const MIME_MAP = {
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png':  'image/png',
+  '.gif':  'image/gif',
+  '.webp': 'image/webp',
+  '.pdf':  'application/pdf',
+};
+
+/**
+ * Scan a text string for tokens that look like file paths to image/PDF files
+ * that actually exist on disk. Returns resolved absolute paths.
+ */
+function findImagePaths(text) {
+  const found = new Set();
+  for (const token of text.split(/\s+/)) {
+    // Expand ~ to home directory
+    const expanded = token.startsWith('~/')
+      ? join(process.env.HOME || '~', token.slice(2))
+      : token;
+    const abs = resolve(expanded);
+    if (IMAGE_EXTS.has(extname(abs).toLowerCase()) && existsSync(abs)) {
+      found.add(abs);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * Read an image/PDF from disk and return the Anthropic content block for it.
+ */
+function imageContentBlock(filePath) {
+  const mime = MIME_MAP[extname(filePath).toLowerCase()] || 'image/jpeg';
+  const data = readFileSync(filePath).toString('base64');
+
+  if (mime === 'application/pdf') {
+    return { type: 'document', source: { type: 'base64', media_type: mime, data } };
+  }
+  return { type: 'image', source: { type: 'base64', media_type: mime, data } };
+}
 
 // ---------------------------------------------------------------------------
 // Boot the REST API server
@@ -123,7 +171,17 @@ that interact with a live database.
 
 When answering questions about spending, always use the tools to fetch real data.
 Format currency as $X.XX. Use markdown tables for summaries when appropriate.
-Be concise but informative.`,
+Be concise but informative.
+
+When the user provides a receipt or invoice image:
+1. Carefully read all text in the image to extract: merchant/vendor name, total amount,
+   date, and any line items that hint at the expense category.
+2. Call save_receipt_image with the base64 image data (copy from the image source) and
+   correct mimetype to persist the image and obtain a receipt_url.
+3. Call add_expense with the extracted fields and the receipt_url from step 2.
+4. Confirm the created expense to the user, noting anything you inferred or assumed.
+If the image is unclear or key fields are missing, make a reasonable inference and
+mention what you assumed.`,
       tools,
       messages,
     });
@@ -218,7 +276,11 @@ async function runInteractive(anthropic, mcpClient, tools) {
   console.log('\n' + '═'.repeat(60));
   console.log('  EXPENSORY — MCP-Driven Expense Manager');
   console.log('═'.repeat(60));
-  console.log('  Type your expense queries. Type "exit" to quit.\n');
+  console.log('  Type expense queries or include a receipt file path.');
+  console.log('  Examples:');
+  console.log('    process this receipt ./starbucks.jpg');
+  console.log('    ~/Downloads/invoice.pdf — lunch at Nobu');
+  console.log('  Type "exit" to quit.\n');
 
   const conversationHistory = [];
 
@@ -226,7 +288,21 @@ async function runInteractive(anthropic, mcpClient, tools) {
     const input = (await ask('You: ')).trim();
     if (!input || input.toLowerCase() === 'exit') break;
 
-    conversationHistory.push({ role: 'user', content: input });
+    // Detect image/PDF file paths embedded anywhere in the message
+    const imagePaths = findImagePaths(input);
+    let userContent;
+
+    if (imagePaths.length > 0) {
+      console.error(`[Receipt] Attaching ${imagePaths.length} file(s): ${imagePaths.join(', ')}`);
+      userContent = [
+        ...imagePaths.map(imageContentBlock),
+        { type: 'text', text: input },
+      ];
+    } else {
+      userContent = input;
+    }
+
+    conversationHistory.push({ role: 'user', content: userContent });
 
     try {
       const messages = [...conversationHistory];

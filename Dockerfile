@@ -11,6 +11,11 @@ RUN npm ci --omit=dev
 COPY api/   ./api/
 COPY mcp/   ./mcp/
 
+# Pre-create the uploads directory so the volume mount lands in the right place.
+# The app also does mkdir({ recursive: true }) at startup, but this makes the
+# directory ownership correct when the volume is first initialised.
+RUN mkdir -p /app/uploads/receipts
+
 EXPOSE 3001
 
 # Healthcheck so Docker Compose can wait for readiness

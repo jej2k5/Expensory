@@ -7,11 +7,11 @@ You ──► Claude (claude-opus-4-6)
               │
               │  MCP tool calls (stdio)
               ▼
-         MCP Server  ── 11 expense tools
+         MCP Server  ── 12 expense tools
               │
               │  HTTP  (REST API)
               ▼
-         Express API
+         Express API  ──  /uploads/receipts/  (static files)
               │
               │  SQL  (pg pool)
               ▼
@@ -145,6 +145,48 @@ Without `API_BASE` set, the client automatically spawns the REST API server as a
 
 ---
 
+## Receipt & Invoice Processing
+
+Expensory can read a receipt or invoice image, extract the expense details automatically, save the image, and create the expense record — all in one step.
+
+### How it works
+
+1. You mention a local image or PDF file path anywhere in your message.
+2. The client reads the file and sends it to Claude alongside your text as a vision input.
+3. Claude reads the receipt — merchant name, total, date, line items — and infers the best category.
+4. Claude calls the `save_receipt_image` MCP tool, which uploads the image to the API and stores it on disk.
+5. Claude calls `add_expense` with the extracted fields and links the saved image URL to the record.
+6. You get a confirmation with everything that was recorded.
+
+### Usage
+
+Include any image or PDF path in your message:
+
+```
+You: process this receipt ./starbucks_jan.jpg
+You: ~/Downloads/uber_receipt.png — please log this
+You: here's last night's dinner invoice /tmp/nobu_invoice.pdf
+```
+
+Supported formats: **JPEG, PNG, GIF, WebP, PDF**
+
+The saved image is accessible at `http://localhost:3001/receipts/<filename>` and the URL is stored in the expense's `receipt_url` field.
+
+### Example session
+
+```
+You: process receipt ./whole_foods.jpg
+
+Expensory: I can see a Whole Foods Market receipt dated March 15, 2026.
+  Total: $87.43
+  I've saved the receipt image and created the expense:
+
+  ✓ Whole Foods Market  |  $87.43  |  Food & Dining  |  2026-03-15
+    Receipt: http://localhost:3001/receipts/receipt_1742065234_a3f1b2.jpg
+```
+
+---
+
 ## Usage
 
 ### Talking to Expensory
@@ -251,6 +293,7 @@ Spawns the MCP server, fetches its tool list, converts the schemas to Anthropic 
 | `update_category` | Rename a category, change its color, or set a default budget |
 | `set_monthly_budget` | Set (or overwrite) a spending limit for a category+month |
 | `get_budget_status` | Actual vs budgeted spend for every category in a given month |
+| `save_receipt_image` | Upload a base64-encoded receipt/invoice image; returns a permanent URL to attach to an expense |
 
 ### Database Schema
 
@@ -292,18 +335,21 @@ budgets (
 ```
 Expensory/
 ├── api/
-│   ├── server.js           # Express entry point; awaits schema init before listening
+│   ├── server.js           # Express entry point; creates uploads dir, awaits schema init
 │   ├── database.js         # pg.Pool setup, schema migration, category seeding
 │   └── routes/
 │       ├── expenses.js     # GET/POST/PUT/DELETE + /summary
 │       ├── categories.js   # GET/POST/PUT/DELETE
-│       └── budgets.js      # GET/POST/DELETE with upsert logic
+│       ├── budgets.js      # GET/POST/DELETE with upsert logic
+│       └── receipts.js     # POST — base64 upload, saved to uploads/receipts/
 ├── mcp/
-│   └── server.js           # MCP server; 11 Zod-validated tools
+│   └── server.js           # MCP server; 12 Zod-validated tools
 ├── client/
-│   └── index.js            # Agentic loop: Anthropic API + MCP tool execution
+│   └── index.js            # Agentic loop: vision input detection + Anthropic API + MCP
+├── uploads/
+│   └── receipts/           # Saved receipt images (Docker volume in production)
 ├── Dockerfile              # node:20-alpine image for the API
-├── docker-compose.yml      # postgres:16-alpine + api services
+├── docker-compose.yml      # postgres + api (with uploads volume) services
 ├── .env.example            # Reference for all environment variables
 └── package.json
 ```
@@ -343,7 +389,24 @@ All endpoints return JSON. Errors follow `{ "error": "message" }`.
 | `POST` | `/budgets` | `category_id`*, `month`* (YYYY-MM), `limit_amount`* |
 | `DELETE` | `/budgets/:category_id/:month` | — |
 
+### Receipts
+
+| Method | Path | Body |
+|---|---|---|
+| `POST` | `/receipts` | `data`* (base64 image), `mimetype`* (`image/jpeg`, `image/png`, `image/gif`, `image/webp`, `application/pdf`), `filename` (hint) |
+| `GET` | `/receipts/:filename` | — (static file) |
+
 \* required field
+
+---
+
+## Receipt Image Storage
+
+Receipt images are saved to `uploads/receipts/` in the project root (or `/app/uploads/receipts/` inside the Docker container). In the Docker Compose setup this directory is backed by a named volume (`uploads_data`) so images survive container restarts and rebuilds.
+
+Each saved file is named `receipt_<timestamp>_<random>.<ext>` and is served directly by the API at `/receipts/<filename>`.
+
+To back up receipts, copy the contents of the uploads volume (or the local `uploads/receipts/` directory).
 
 ---
 

@@ -2,7 +2,7 @@
  * Expensory MCP Server
  *
  * Exposes expense management tools over the Model Context Protocol.
- * Each tool calls the Expensory REST API which persists data in SQLite.
+ * Each tool calls the Expensory REST API which persists data in PostgreSQL.
  *
  * Tools:
  *   - add_expense          Create a new expense
@@ -16,6 +16,7 @@
  *   - update_category      Update a category name / color / budget
  *   - set_monthly_budget   Set a monthly budget for a category
  *   - get_budget_status    Compare actual spend vs budgets for a month
+ *   - save_receipt_image   Persist a base64-encoded receipt/invoice image and return its URL
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -246,6 +247,33 @@ server.tool(
     };
 
     return text({ summary, budgets: result.budgets });
+  }
+);
+
+// ── save_receipt_image ───────────────────────────────────────────────────────
+server.tool(
+  'save_receipt_image',
+  'Save a base64-encoded receipt or invoice image to the server. Returns the permanent URL to attach to an expense via the receipt_url field. Call this before add_expense or update_expense whenever you have image data to store.',
+  {
+    image_data: z.string().describe('Base64-encoded image data (no data URI prefix)'),
+    mimetype:   z.string().describe(
+      'MIME type of the image: image/jpeg, image/png, image/gif, image/webp, or application/pdf'
+    ),
+    filename:   z.string().optional().describe('Original filename hint (e.g. "starbucks_jan.jpg")'),
+  },
+  async ({ image_data, mimetype, filename }) => {
+    const result = await apiCall('POST', '/receipts', {
+      data: image_data,
+      mimetype,
+      filename,
+    });
+    const receipt_url = `${API_BASE}/receipts/${result.filename}`;
+    return text({
+      message:     'Receipt image saved successfully',
+      receipt_url,
+      filename:    result.filename,
+      size_bytes:  result.size,
+    });
   }
 );
 

@@ -31,6 +31,9 @@ services:
       API_PORT: 3001
     ports:
       - "3001:3001"
+    volumes:
+      # Persist uploaded receipt images across container restarts and rebuilds
+      - uploads_data:/app/uploads/receipts
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
       interval: 5s
@@ -40,3 +43,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:
